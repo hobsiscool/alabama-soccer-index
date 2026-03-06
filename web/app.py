@@ -6,9 +6,13 @@ from predictor import predict_matchup
 import os
 import re
 from streamlit_autorefresh import st_autorefresh
+from dotenv import load_dotenv
 
-# 1. Live Heartbeat: Auto-refresh every 30 seconds
-count = st_autorefresh(interval=30000, key="datarefresh")
+# Load variables from .env file for local development
+load_dotenv()
+
+# 1. Live Heartbeat: Auto-refresh the dashboard every 30 seconds
+st_autorefresh(interval=30000, key="datarefresh")
 
 st.set_page_config(page_title="AL Soccer Analytics", layout="wide")
 engine = create_engine(os.getenv("DATABASE_URL"))
@@ -19,7 +23,7 @@ def format_trend(val):
     if val < 0: return f"⬇️ {int(abs(val))}"
     return "↔️"
 
-# 2. Math Cache: Set to 60s for "live" feel during deep scraping
+# 2. Math Cache: Set to 60s to maintain performance during background scraping
 @st.cache_data(ttl=60) 
 def get_cached_rankings(_df):
     return get_rankings_with_trend(_df)
@@ -30,7 +34,7 @@ st.title("⚽ Alabama Soccer Power Index")
 try:
     count_df = pd.read_sql("SELECT count(*) as total FROM games", engine)
     total_games = count_df['total'].iloc[0]
-    # Updated to 3500 for statewide coverage
+    # statewide goal set to 3500 games
     progress = min(total_games / 3500, 1.0)
     st.progress(progress, text=f"Statewide Database Population: {total_games} games captured")
 except:
@@ -46,7 +50,7 @@ try:
 except:
     pass
 
-# --- Data Engine ---
+# --- Main Data Engine ---
 try:
     df = pd.read_sql("SELECT * FROM games", engine)
     if not df.empty:
@@ -55,34 +59,35 @@ try:
             "1673": "4A", "1674": "1A-3A"
         }
         
-        # Rankings calculation
+        # Calculate Rankings
         rankings = get_cached_rankings(df)
         lookup = df.set_index('team')['classification'].to_dict()
 
-        # --- UPDATED: Statewide Top 25 Section (AHSAA Only) ---
+        # --- Statewide Top 25 Section (AHSAA Only) ---
         st.header("🏆 Statewide Top 25 (AHSAA Only)")
 
-        # 1. Get the list of all AHSAA teams by looking at who has an assigned classification
+        # Filter for teams that belong to a known Alabama classification
         ahsaa_teams = [team for team, c_id in lookup.items() if c_id in class_map]
-
-        # 2. Filter the rankings to ONLY include those teams BEFORE taking the head(25)
         rankings_ahsaa = rankings[rankings.index.isin(ahsaa_teams)].copy()
 
-        # 3. Calculate Average 7A Rating for the badge based on AHSAA-only data
+        # Calculate Average 7A Rating for the Giant Killer badge
         avg_7a = rankings_ahsaa[rankings_ahsaa.index.map(lookup) == "1670"]['Rating'].mean()
 
         top_25 = rankings_ahsaa.head(25).copy()
         top_25.insert(0, 'Rank', range(1, len(top_25) + 1))
         top_25['Class'] = top_25.index.map(lambda x: class_map.get(lookup.get(x)))
 
-        # Giant Killer badge logic
+        # Giant Killer badge: Non-7A teams outperforming the 7A average
         top_25.index = [
             f"{name} ⚔️" if (lookup.get(name) != "1670" and row['Rating'] > avg_7a) else name 
             for name, row in top_25.iterrows()
         ]
 
         st.dataframe(
-            top_25[['Rank', 'Class', 'Trend', 'Rating', 'SOS']].style.background_gradient(cmap='RdYlGn', subset=['Rating']).format(precision=2),
+            top_25[['Rank', 'Class', 'Trend', 'Rating', 'SOS']].style.background_gradient(
+                cmap='RdYlGn', 
+                subset=['Rating', 'SOS']
+            ).format(precision=2),
             width='stretch'
         )
 
@@ -102,15 +107,21 @@ try:
         display_df['Trend'] = display_df['Trend'].apply(format_trend)
         
         st.dataframe(
-            display_df[['Rank', 'Trend', 'Rating', 'SOS']].style.background_gradient(cmap='RdYlGn', subset=['Rating', 'SOS']).format(precision=2),
+            display_df[['Rank', 'Trend', 'Rating', 'SOS']].style.background_gradient(
+                cmap='RdYlGn', 
+                subset=['Rating', 'SOS']
+            ).format(precision=2),
             width='stretch'
         )
         
-        # --- Matchup Predictor (Cached for Speed) ---
+        # --- Matchup Predictor ---
         st.divider()
         st.header("🔮 Matchup Predictor")
         c1, c2 = st.columns(2)
-        sorted_teams = sorted(rankings.index.tolist())
+
+        # Alphabetical list of Alabama-only teams
+        sorted_teams = sorted(ahsaa_teams) 
+
         h_team = c1.selectbox("Home Team", sorted_teams, index=0)
         a_team = c2.selectbox("Away Team", sorted_teams, index=min(1, len(sorted_teams)-1))
         

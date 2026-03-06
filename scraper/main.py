@@ -3,6 +3,9 @@ from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, text
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from dotenv import load_dotenv
+
+load_dotenv()
 
 engine = create_engine(os.getenv("DATABASE_URL"))
 BASE_URL = "https://scorbord.com"
@@ -90,8 +93,17 @@ def scrape_cycle():
                 print(f"Error on {team_name}: {e}")
 
 if __name__ == "__main__":
-    time.sleep(5)
-    while True:
+    # Check if we are running on GitHub Actions
+    is_github = os.getenv("GITHUB_ACTIONS") == "true"
+    
+    if is_github:
+        print("Starting automated single-cycle scrape...")
         scrape_cycle()
-        print("Cycle complete. Sleeping for 24 hours...")
-        time.sleep(86400)
+        print("GitHub scrape complete.")
+    else:
+        # Keep your local infinite loop logic
+        time.sleep(5)
+        while True:
+            scrape_cycle()
+            print("Local cycle complete. Sleeping for 24 hours...")
+            time.sleep(86400)

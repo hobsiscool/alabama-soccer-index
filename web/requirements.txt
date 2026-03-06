@@ -6,3 +6,4 @@ scipy             # For the Poisson distribution (Matchup Predictor)
 numpy             # For advanced math operations
 matplotlib
 streamlit-autorefresh
+python-dotenv
