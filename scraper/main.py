@@ -9,7 +9,7 @@ load_dotenv()
 
 # --- DIAGNOSTIC TOGGLE ---
 # Set to True to ONLY check Pelham and ensure all 11 games are caught.
-CHECK_PELHAM_ONLY = True 
+CHECK_PELHAM_ONLY = False 
 # -------------------------
 
 engine = create_engine(os.getenv("DATABASE_URL"))
