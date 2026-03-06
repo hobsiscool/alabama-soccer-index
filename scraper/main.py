@@ -33,47 +33,40 @@ def normalize_name(name):
     return name.strip().title()
 
 def get_game_hash(date, t1, t2):
-    """Aggressive space-stripping to ensure hashes match across formats."""
     c1, c2 = normalize_name(t1), normalize_name(t2)
-    date_key = "".join(str(date).split())
+    # This removes EVERY bit of whitespace (spaces, tabs, non-breaking spaces)
+    date_key = re.sub(r'\s+', '', str(date))
     combined = "".join(sorted([c1, c2])) + date_key
     return hashlib.md5(combined.encode()).hexdigest()
 
 def process_match_element(match, primary_team_name, c_id):
-    """Hunter logic: digs into every match div provided in your source."""
-    # 1. Extraction: Scores
+    # Standardize all whitespace in the date immediately
+    date_el = match.find('div', class_='date')
+    if not date_el: return
+    
+    date_raw = date_el.get_text(strip=True)
+    # Clean 'ThursdayFeb 5, 2026' into 'Feb 5, 2026'
+    date_clean = re.sub(r'^[a-zA-Z]+', '', date_raw)
+    date_clean = " ".join(date_clean.split())
+
+    # Find scores - handle potentially empty results for upcoming games
     f_el = match.find('span', class_='our_score')
     a_el = match.find('span', class_='their_score')
-    score_f, score_a = None, None
-    if f_el and a_el and f_el.text.strip():
-        try:
-            score_f, score_a = int(f_el.text.strip()), int(a_el.text.strip())
-        except: pass
+    score_f = int(f_el.text.strip()) if f_el and f_el.text.strip() else None
+    score_a = int(a_el.text.strip()) if a_el and a_el.text.strip() else None
 
-    # 2. Extraction: Opponent & Date
     opp_link = match.find('a', href=re.compile(r'/teams/'))
     if not opp_link: return
     
     n_primary = normalize_name(primary_team_name)
-    n_opponent = normalize_name(opp_link.text.strip())
-    
-    date_el = match.find('div', class_='date')
-    if date_el:
-        date_raw = date_el.get_text(strip=True)
-        # Regex removes day name (Thursday) but keeps 'Feb 5, 2026'
-        date_clean = re.sub(r'^[a-zA-Z]+', '', date_raw) 
-        date_clean = " ".join(date_clean.split())
-    else:
-        date_clean = "Unknown"
+    n_opponent = normalize_name(opp_link.text)
 
-    # 3. Location: Neutral/Home/Away Logic
+    # Location Logic
     is_home = "@" not in opp_link.get_text()
     is_neutral = False
     comment = match.find('div', class_='comment')
-    if comment:
-        txt = comment.get_text().lower()
-        if any(w in txt for w in ['neutral', 'shootout', 'tournament', 'classic']):
-            is_neutral, is_home = True, False
+    if comment and any(w in comment.text.lower() for w in ['neutral', 'shootout', 'tournament']):
+        is_neutral, is_home = True, False
 
     g_id = get_game_hash(date_clean, n_primary, n_opponent)
     
@@ -82,11 +75,23 @@ def process_match_element(match, primary_team_name, c_id):
             INSERT INTO games (game_id, game_date, team, opponent, score_f, score_a, is_home, is_neutral, classification)
             VALUES (:id, :dt, :t, :o, :sf, :sa, :ih, :in, :cl)
             ON CONFLICT (game_id) DO UPDATE SET 
-                classification = EXCLUDED.classification, -- HEAL placeholder classes
-                score_f = COALESCE(EXCLUDED.score_f, games.score_f),
-                score_a = COALESCE(EXCLUDED.score_a, games.score_a)
+                classification = EXCLUDED.classification,
+                score_f = EXCLUDED.score_f,
+                score_a = EXCLUDED.score_a
         """), {"id": g_id, "dt": date_clean, "t": n_primary, "o": n_opponent, 
                "sf": score_f, "sa": score_a, "ih": is_home, "in": is_neutral, "cl": c_id})
+
+def deep_sync_team(session, name, url, cid):
+    print(f"  Nuclear Sync: {name}...", flush=True)
+    try:
+        res = session.get(url)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        # SELECTOR FIX: Grabs 'match' and 'match conference'
+        matches = soup.select('.match') 
+        for m in matches:
+            process_match_element(m, name, cid)
+    except Exception as e:
+        print(f"Error: {e}")
 
 def scrape_cycle():
     session = get_session()
@@ -112,7 +117,7 @@ def deep_sync_team(session, name, url, cid):
         res = session.get(url)
         soup = BeautifulSoup(res.text, 'html.parser')
         # This finds ALL games regardless of tournament headers
-        matches = soup.find_all('div', class_='match')
+        matches = soup.select('div.match, div.match.conference')
         for m in matches:
             process_match_element(m, name, cid)
         time.sleep(random.uniform(1.0, 1.5))
