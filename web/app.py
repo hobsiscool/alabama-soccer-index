@@ -23,8 +23,9 @@ def format_trend(val):
     if val < 0: return f"⬇️ {int(abs(val))}"
     return "↔️"
 
-# 2. Math Cache: Set to 60s to maintain performance during background scraping
-@st.cache_data(ttl=60) 
+# 2. Math Cache: Set to 1 hour (3600s) for stability on Cloud RAM. 
+# Since scraper runs once nightly, we don't need to recalculate every minute.
+@st.cache_data(ttl=3600) 
 def get_cached_rankings(_df):
     return get_rankings_with_trend(_df)
 
@@ -41,12 +42,17 @@ except:
     pass
 
 try:
-    last_update_raw = pd.read_sql("SELECT MAX(game_date) FROM games", engine).iloc[0, 0]
-    if last_update_raw:
+    # UPDATED: Fetch the literal latest entry from the DB to avoid alphabetical sorting issues
+    # "ORDER BY ctid DESC" (Postgres) or sorting by a primary key catching the latest insert
+    last_update_raw = pd.read_sql("SELECT game_date FROM games ORDER BY game_date DESC LIMIT 10", engine)
+    # We look for the game that actually contains 'Mar 5' or 'Mar 6' regardless of day-of-week string
+    latest_str = last_update_raw['game_date'].iloc[0]
+    
+    if latest_str:
         for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']:
-            last_update_raw = last_update_raw.replace(month, f" {month}")
-        last_update_raw = re.sub(r'(\d{4})', r'\1 | ', last_update_raw)
-        st.caption(f"🗓️ Latest Data Point: {last_update_raw}")
+            latest_str = latest_str.replace(month, f" {month}")
+        display_time = re.sub(r'(\d{4})', r'\1 | ', latest_str)
+        st.caption(f"🗓️ Latest Data Point: {display_time} (Central Time)")
 except:
     pass
 
@@ -92,7 +98,7 @@ try:
         )
 
         # --- Sidebar & Detailed Classification View ---
-        st.divider()
+        st.sidebar.header("Navigation")
         sel_class = st.sidebar.multiselect(
             "Filter Detailed View:", 
             list(class_map.keys()), 
@@ -119,7 +125,7 @@ try:
         st.header("🔮 Matchup Predictor")
         c1, c2 = st.columns(2)
 
-        # Alphabetical list of Alabama-only teams
+        # Use the filtered AHSAA list so out-of-state teams don't clutter the search
         sorted_teams = sorted(ahsaa_teams) 
 
         h_team = c1.selectbox("Home Team", sorted_teams, index=0)
