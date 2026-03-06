@@ -1,0 +1,8 @@
+streamlit         # The web framework for your dashboard
+pandas            # For data manipulation and ranking math
+sqlalchemy        # To pull scores from your database
+psycopg2-binary   # To connect to PostgreSQL
+scipy             # For the Poisson distribution (Matchup Predictor)
+numpy             # For advanced math operations
+matplotlib
+streamlit-autorefresh

@@ -1,0 +1,5 @@
+requests          # For downloading the web pages
+beautifulsoup4    # For parsing the HTML
+sqlalchemy        # For communicating with the database
+psycopg2-binary   # The "driver" for PostgreSQL
+pandas            # For organizing data before saving
