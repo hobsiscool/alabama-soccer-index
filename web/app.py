@@ -42,17 +42,14 @@ except:
     pass
 
 try:
-    # UPDATED: Fetch the literal latest entry from the DB to avoid alphabetical sorting issues
-    # "ORDER BY ctid DESC" (Postgres) or sorting by a primary key catching the latest insert
-    last_update_raw = pd.read_sql("SELECT game_date FROM games ORDER BY game_date DESC LIMIT 10", engine)
-    # We look for the game that actually contains 'Mar 5' or 'Mar 6' regardless of day-of-week string
-    latest_str = last_update_raw['game_date'].iloc[0]
-    
-    if latest_str:
-        for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']:
-            latest_str = latest_str.replace(month, f" {month}")
-        display_time = re.sub(r'(\d{4})', r'\1 | ', latest_str)
-        st.caption(f"🗓️ Latest Data Point: {display_time} (Central Time)")
+    # Logic to find the literal most recent date regardless of day name
+    date_query = "SELECT game_date FROM games"
+    date_df = pd.read_sql(date_query, engine)
+    if not date_df.empty:
+        # Strips day names to parse real dates
+        date_df['clean_dt'] = pd.to_datetime(date_df['game_date'].str.replace(r'^[a-zA-Z]+ ', '', regex=True), errors='coerce')
+        latest_str = date_df.sort_values('clean_dt', ascending=False)['game_date'].iloc[0]
+        st.caption(f"🗓️ Latest Data Point: {latest_str} (Central Time)")
 except:
     pass
 
