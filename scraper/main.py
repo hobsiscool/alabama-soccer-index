@@ -7,11 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- DIAGNOSTIC TOGGLE ---
-# Set to True to ONLY check Pelham and ensure all 11 games are caught.
-CHECK_PELHAM_ONLY = False 
-# -------------------------
-
 engine = create_engine(os.getenv("DATABASE_URL"))
 BASE_URL = "https://scorbord.com"
 
@@ -27,101 +22,104 @@ def get_session():
     return session
 
 def normalize_name(name):
-    """Standardizes names and strips special characters."""
+    """Nuclear standardization to unify 'Ghost Teams' across the state."""
     name = name.replace("High School", "").replace("High", "").replace("HS", "")
     name = name.replace("@", "").replace("†", "").strip()
     return name.strip().title()
 
 def get_game_hash(date, t1, t2):
+    """Unique ID that is identical regardless of who is 'Home' or 'Away'."""
     c1, c2 = normalize_name(t1), normalize_name(t2)
-    # This removes EVERY bit of whitespace (spaces, tabs, non-breaking spaces)
-    date_key = re.sub(r'\s+', '', str(date))
+    # Strip all whitespace from date to prevent 'Feb 5' vs 'Feb  5' mismatches
+    date_key = "".join(str(date).split())
     combined = "".join(sorted([c1, c2])) + date_key
     return hashlib.md5(combined.encode()).hexdigest()
 
 def process_match_element(match, primary_team_name, c_id):
-    # Standardize all whitespace in the date immediately
-    date_el = match.find('div', class_='date')
-    if not date_el: return
-    
-    date_raw = date_el.get_text(strip=True)
-    # Clean 'ThursdayFeb 5, 2026' into 'Feb 5, 2026'
-    date_clean = re.sub(r'^[a-zA-Z]+', '', date_raw)
-    date_clean = " ".join(date_clean.split())
-
-    # Find scores - handle potentially empty results for upcoming games
+    """Universal hunter for played and upcoming games with forced healing."""
+    # 1. Score Extraction
     f_el = match.find('span', class_='our_score')
     a_el = match.find('span', class_='their_score')
-    score_f = int(f_el.text.strip()) if f_el and f_el.text.strip() else None
-    score_a = int(a_el.text.strip()) if a_el and a_el.text.strip() else None
+    score_f, score_a = None, None
+    if f_el and a_el and f_el.text.strip():
+        try:
+            score_f, score_a = int(f_el.text.strip()), int(a_el.text.strip())
+        except: pass
 
+    # 2. Opponent & Date Extraction
     opp_link = match.find('a', href=re.compile(r'/teams/'))
     if not opp_link: return
     
+    raw_opp_text = opp_link.text.strip()
     n_primary = normalize_name(primary_team_name)
-    n_opponent = normalize_name(opp_link.text)
+    n_opponent = normalize_name(raw_opp_text)
+    
+    date_el = match.find('div', class_='date')
+    if date_el:
+        date_raw = date_el.get_text(strip=True)
+        date_clean = re.sub(r'^[a-zA-Z]+', '', date_raw) # Strip 'Thursday'
+        date_clean = " ".join(date_clean.split())
+    else:
+        date_clean = "Unknown"
 
-    # Location Logic
-    is_home = "@" not in opp_link.get_text()
+    # 3. Location Logic
+    is_home = "@" not in raw_opp_text
     is_neutral = False
     comment = match.find('div', class_='comment')
-    if comment and any(w in comment.text.lower() for w in ['neutral', 'shootout', 'tournament']):
-        is_neutral, is_home = True, False
+    if comment:
+        txt = comment.text.lower()
+        if any(w in txt for w in ['neutral', 'shootout', 'tournament', 'classic']):
+            is_neutral, is_home = True, False
 
     g_id = get_game_hash(date_clean, n_primary, n_opponent)
     
     with engine.begin() as conn:
+        # DO UPDATE forces the official Class ID and latest scores
         conn.execute(text("""
             INSERT INTO games (game_id, game_date, team, opponent, score_f, score_a, is_home, is_neutral, classification)
             VALUES (:id, :dt, :t, :o, :sf, :sa, :ih, :in, :cl)
             ON CONFLICT (game_id) DO UPDATE SET 
                 classification = EXCLUDED.classification,
-                score_f = EXCLUDED.score_f,
-                score_a = EXCLUDED.score_a
+                score_f = COALESCE(EXCLUDED.score_f, games.score_f),
+                score_a = COALESCE(EXCLUDED.score_a, games.score_a),
+                is_home = EXCLUDED.is_home,
+                is_neutral = EXCLUDED.is_neutral
         """), {"id": g_id, "dt": date_clean, "t": n_primary, "o": n_opponent, 
                "sf": score_f, "sa": score_a, "ih": is_home, "in": is_neutral, "cl": c_id})
-
-def deep_sync_team(session, name, url, cid):
-    print(f"  Nuclear Sync: {name}...", flush=True)
-    try:
-        res = session.get(url)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        # SELECTOR FIX: Grabs 'match' and 'match conference'
-        matches = soup.select('.match') 
-        for m in matches:
-            process_match_element(m, name, cid)
-    except Exception as e:
-        print(f"Error: {e}")
 
 def scrape_cycle():
     session = get_session()
     
-    if CHECK_PELHAM_ONLY:
-        print("!!! RUNNING PELHAM DIAGNOSTIC SYNC !!!", flush=True)
-        deep_sync_team(session, "Pelham", "https://scorbord.com/teams/752720", "1671")
-        print("Diagnostic complete. Check SQL count now.", flush=True)
+    # PHASE 1: Build the Master Alabama Directory
+    print("Building Alabama Master Baseline...", flush=True)
+    try:
+        res = session.get(f"{BASE_URL}/states/al/sports/boys-soccer/teams")
+        soup = BeautifulSoup(res.text, 'html.parser')
+        all_teams = []
+        for li in soup.select('#team_list .team'):
+            n_link = li.select_one('.name a')
+            c_link = li.select_one('.classification a')
+            if n_link and c_link:
+                # Extracting classification ID from the href (e.g., 1671)
+                cid = c_link.get('href').split('/')[-2]
+                all_teams.append((n_link.text.strip(), BASE_URL + n_link.get('href'), cid))
+    except Exception as e:
+        print(f"Failed to build master list: {e}", flush=True)
         return
 
-    # Normal state-wide logic below...
-    classes = [("1670", "7A"), ("1671", "6A"), ("1672", "5A"), ("1673", "4A"), ("1674", "1A-3A")]
-    for c_id, c_name in classes:
-        print(f"Syncing Class {c_name}...", flush=True)
-        res = session.get(f"{BASE_URL}/classifications/{c_id}/teams")
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for link in soup.select('#team_list .name a'):
-            deep_sync_team(session, link.text.strip(), BASE_URL + link.get('href'), c_id)
-
-def deep_sync_team(session, name, url, cid):
-    print(f"  Scraping: {name}...", flush=True)
-    try:
-        res = session.get(url)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        # This finds ALL games regardless of tournament headers
-        matches = soup.select('div.match, div.match.conference')
-        for m in matches:
-            process_match_element(m, name, cid)
-        time.sleep(random.uniform(1.0, 1.5))
-    except: pass
+    # PHASE 2: Deep-Dive every team profile in the state
+    print(f"Total teams found: {len(all_teams)}. Starting deep sync...", flush=True)
+    for name, url, cid in all_teams:
+        print(f"  Syncing: {normalize_name(name)} (Class {cid})...", flush=True)
+        time.sleep(random.uniform(1.0, 1.8)) # Safety throttle
+        try:
+            t_res = session.get(url)
+            t_soup = BeautifulSoup(t_res.text, 'html.parser')
+            # The .match selector handles regular, area, and conference games
+            for match in t_soup.select('.match'):
+                process_match_element(match, name, cid)
+        except Exception as e:
+            print(f"    Error syncing {name}: {e}", flush=True)
 
 if __name__ == "__main__":
     scrape_cycle()
